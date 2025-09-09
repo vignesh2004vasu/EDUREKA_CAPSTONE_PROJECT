@@ -4,6 +4,7 @@ import numpy as np
 from sqlalchemy import create_engine
 import joblib
 from sklearn.ensemble import IsolationForest, RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, accuracy_score
@@ -24,7 +25,7 @@ st.title("AdventureWorks Analytics Dashboard")
 # === Sidebar ===
 option = st.sidebar.selectbox(
     "Select Section",
-    ("Data Analysis", "Anomaly Detection", "Territory Performance", "Churn Prediction")
+    ("Data Analysis", "Sales Forecast", "Anomaly Detection", "Territory Performance", "Churn Prediction")
 )
 
 # === Helper: fetch tables ===
@@ -42,12 +43,13 @@ customers = fetch_table("customers")
 
 # --- Combine and preprocess ---
 sales = pd.concat([sales_2015, sales_2016, sales_2017], ignore_index=True)
-sales = sales.merge(products[['ProductKey','ProductPrice']], on='ProductKey', how='left')
+sales = sales.merge(products[['ProductKey','ProductPrice','ProductCost']], on='ProductKey', how='left')
 
 # Clean numeric fields
 sales['OrderQuantity'] = pd.to_numeric(sales['OrderQuantity'], errors='coerce')
 sales['ProductPrice'] = pd.to_numeric(sales['ProductPrice'].replace(r'[\$,]', '', regex=True), errors='coerce')
-sales = sales.dropna(subset=['OrderQuantity','ProductPrice'])
+sales['ProductCost'] = pd.to_numeric(sales['ProductCost'], errors='coerce')
+sales = sales.dropna(subset=['OrderQuantity','ProductPrice','ProductCost'])
 sales['SalesAmount'] = sales['OrderQuantity'] * sales['ProductPrice']
 
 # --- Data Analysis Section ---
@@ -83,6 +85,45 @@ if option == "Data Analysis":
     st.pyplot(fig)
     plt.clf()
 
+# --- Sales Forecast Section ---
+elif option == "Sales Forecast":
+    st.header("Sales Forecast")
+    
+    X = sales[['OrderQuantity','ProductPrice','ProductCost']]
+    y = sales['SalesAmount']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Train Linear Regression
+    lin_model = LinearRegression()
+    lin_model.fit(X_train, y_train)
+    lin_preds = lin_model.predict(X_test)
+    lin_mae = mean_absolute_error(y_test, lin_preds)
+    st.write("Linear Regression MAE:", lin_mae)
+    
+    # Train Random Forest
+    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_model.fit(X_train, y_train)
+    rf_preds = rf_model.predict(X_test)
+    rf_mae = mean_absolute_error(y_test, rf_preds)
+    st.write("Random Forest MAE:", rf_mae)
+    
+    # Choose best model
+    if rf_mae < lin_mae:
+        best_model = rf_model
+        st.write("✅ Random Forest selected as best model")
+    else:
+        best_model = lin_model
+        st.write("✅ Linear Regression selected as best model")
+    
+    # Show predictions
+    st.subheader("Predictions vs Actual")
+    st.dataframe(pd.DataFrame({'Actual': y_test, 'Predicted': best_model.predict(X_test)}).head(50))
+    
+    # Save model
+    joblib.dump(best_model, "sales_forecast_model.pkl")
+    st.success("Sales Forecast Model saved as 'sales_forecast_model.pkl'")
+
 # --- Anomaly Detection Section ---
 elif option == "Anomaly Detection":
     st.header("Anomaly Detection")
@@ -117,7 +158,6 @@ elif option == "Territory Performance":
     
     st.write("### Territory Predictions vs Actual")
     st.dataframe(pd.DataFrame({'Actual':y_test,'Predicted':y_pred}).head(50))
-    
     st.write("MAE:", mean_absolute_error(y_test, y_pred))
     
     joblib.dump(rf_terr, "territory_performance_model.pkl")
